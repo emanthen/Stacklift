@@ -95,6 +95,12 @@ resource "aws_route53_record" "cert_validation" {
 resource "aws_acm_certificate_validation" "this" {
   certificate_arn         = aws_acm_certificate.this.arn
   validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
+
+  # Default provider timeout is 75 min. 30 min fails fast if DNS is misconfigured
+  # rather than silently hanging terraform apply for over an hour.
+  timeouts {
+    create = "30m"
+  }
 }
 
 # ── APPLICATION LOAD BALANCER ─────────────────────────────────────────────────
@@ -193,6 +199,11 @@ resource "aws_lb_listener" "https" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.this.arn
   }
+
+  # Explicit dependency — the implicit one via certificate_arn is sufficient for
+  # planning but AWS rejects the listener if the cert is still PENDING_VALIDATION
+  # at the moment of creation. This guarantees the cert is ISSUED first.
+  depends_on = [aws_acm_certificate_validation.this]
 
   tags = merge(var.tags, {
     Name        = "${local.name_prefix}-listener-https"

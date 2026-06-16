@@ -272,6 +272,10 @@ resource "aws_ecs_service" "this" {
     rollback = true
   }
 
+  # Keep false on first apply — ECR has no real image yet, health checks will fail.
+  # CI/CD sets this true (or use -var wait_for_steady_state=true) after first push.
+  wait_for_steady_state = var.wait_for_steady_state
+
   health_check_grace_period_seconds = var.health_check_grace_period_seconds
 
   tags = merge(var.tags, {

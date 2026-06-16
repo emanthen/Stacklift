@@ -4,7 +4,7 @@ variable "project_name" {
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{1,28}[a-z0-9]$", var.project_name))
-    error_message = "project_name must be 3–30 lowercase letters, numbers, or hyphens, starting with a letter."
+    error_message = "project_name must be 3–30 lowercase letters, numbers, or hyphens, starting with a letter. No trailing hyphens. This module accepts suffixed names (e.g. 'myapp-web') — the base project_name in your example should be max 22 chars."
   }
 }
 
@@ -163,6 +163,17 @@ variable "task_role_policy_arns" {
 
 variable "enable_migration_task" {
   description = "When true, creates an additional ECS task definition for running Django migrations. The task uses the same image, IAM roles, secrets, and log group as the web service but runs 'python manage.py migrate --no-input' as its command. Run via aws ecs run-task in CI/CD — not a long-running service."
+  type        = bool
+  default     = false
+}
+
+variable "wait_for_steady_state" {
+  description = <<-EOT
+    When true, terraform apply waits until the ECS service reaches a steady state
+    (all tasks running and healthy) before returning. Set false on first apply —
+    no real image exists in ECR yet, so the health check will fail and Terraform
+    will time out. Set true in CI/CD after the first image push.
+  EOT
   type        = bool
   default     = false
 }

@@ -229,6 +229,48 @@ Save this output. You'll need the values for the next steps.
 
 ---
 
+## Step 5.5 — Push your first image (required before ECS health checks pass)
+
+ECS started your service, but it's pulling `latest` from ECR which is empty. The tasks are failing their health checks and being replaced in a loop. This is expected — fix it by pushing a real image before GitHub Actions takes over.
+
+```powershell
+# Authenticate Docker to ECR
+aws ecr get-login-password --region us-east-1 --no-cli-pager | `
+  docker login --username AWS `
+  --password-stdin `
+  $(terraform output -raw ecr_repository_url)
+
+# Build and push your app image (run from your Django project root)
+docker build -t $(terraform output -raw ecr_repository_url):latest .
+docker push $(terraform output -raw ecr_repository_url):latest
+
+# Force ECS to pull the new image immediately
+aws ecs update-service `
+  --cluster $(terraform output -raw cluster_name) `
+  --service $(terraform output -raw web_service_name) `
+  --force-new-deployment `
+  --no-cli-pager
+
+# Wait for the service to stabilise (takes ~2 minutes)
+aws ecs wait services-stable `
+  --cluster $(terraform output -raw cluster_name) `
+  --services $(terraform output -raw web_service_name) `
+  --no-cli-pager
+
+echo "Service is stable. Health checks passing."
+```
+
+Once this succeeds, every future deploy is handled by GitHub Actions automatically (Step 8). You never run `docker push` manually again.
+
+**Verify the health check responds:**
+
+```powershell
+# Should return HTTP/2 200
+curl -I "https://$(terraform output -raw domain_name)/api/health/" --no-cli-pager
+```
+
+---
+
 ## Step 6 — Set your real secrets (2 minutes)
 
 Terraform wrote placeholder values to Secrets Manager on first apply. Replace them now:
