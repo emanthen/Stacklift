@@ -270,6 +270,8 @@ resource "aws_security_group_rule" "ecs_celery_to_rds" {
 # To skip on apply: terraform apply -target=module.ecs_web (excludes null_resource)
 
 resource "null_resource" "run_migrations" {
+  count = var.run_migrations_on_apply ? 1 : 0
+
   triggers = {
     task_definition = module.ecs_web.migrate_task_definition_family
   }
@@ -330,9 +332,10 @@ module "cicd" {
   github_repo          = var.github_repo
   github_branch        = var.github_branch
 
-  ecr_repository_arn      = module.ecr.repository_arn
-  ecs_cluster_arn         = module.ecs_cluster.cluster_arn
-  ecs_service_arn         = module.ecs_web.service_id
-  task_execution_role_arn = module.ecs_web.task_execution_role_arn
-  task_role_arn           = module.ecs_web.task_role_arn
+  ecr_repository_arn            = module.ecr.repository_arn
+  ecs_cluster_arn               = module.ecs_cluster.cluster_arn
+  ecs_service_arn               = module.ecs_web.service_id
+  task_execution_role_arn       = module.ecs_web.task_execution_role_arn
+  task_role_arn                 = module.ecs_web.task_role_arn
+  migration_task_definition_arn = module.ecs_web.migrate_task_definition_arn
 }

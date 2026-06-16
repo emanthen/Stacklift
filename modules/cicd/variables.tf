@@ -74,6 +74,12 @@ variable "ecs_service_arn" {
   type        = string
 }
 
+variable "migration_task_definition_arn" {
+  description = "ARN of the migration ECS task definition. When set, ecs:RunTask is scoped to this ARN (instead of *). Use module.ecs_web.migrate_task_definition_arn. Leave empty if enable_migration_task = false."
+  type        = string
+  default     = ""
+}
+
 # ── IAM PassRole ─────────────────────────────────────────────────────────────
 
 variable "task_execution_role_arn" {

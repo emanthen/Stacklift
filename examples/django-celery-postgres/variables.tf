@@ -1,6 +1,11 @@
 variable "project_name" {
-  description = "Name of the project. Prefix for all AWS resource names."
+  description = "Name of the project. Prefix for all AWS resource names. Max 22 chars — the example appends '-web' and '-celery' suffixes for ECS service names, which must stay under the 30-char module limit."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{1,20}[a-z0-9]$", var.project_name))
+    error_message = "project_name must be 3–22 lowercase letters, numbers, or hyphens, starting with a letter. The '-web' and '-celery' suffixes are added automatically by this example."
+  }
 }
 
 variable "environment" {
@@ -124,4 +129,19 @@ variable "create_oidc_provider" {
   description = "Create the GitHub Actions OIDC provider. Set false if another project already created it in this AWS account."
   type        = bool
   default     = true
+}
+
+variable "run_migrations_on_apply" {
+  description = <<-EOT
+    Set true to run Django migrations via a local-exec null_resource during terraform apply.
+    Leave false (default) on first apply — no Docker image exists in ECR yet.
+
+    Primary migration path: the deploy.yml CI/CD workflow runs migrations automatically
+    before every web service deploy using aws ecs run-task + aws ecs wait tasks-stopped.
+    Use this variable only for one-off out-of-band migration runs via Terraform.
+
+    Requires: AWS CLI + bash (Git Bash on Windows, native on macOS/Linux).
+  EOT
+  type        = bool
+  default     = false
 }

@@ -173,8 +173,48 @@ data "aws_iam_policy_document" "ecs_deploy" {
     resources = [var.ecs_cluster_arn]
   }
 
-  # iam:PassRole — required to register a task definition that references IAM roles.
-  # ⚠️  Scoped to task execution role + task role only.
+  # RunTask — required by the migration step in deploy.yml (aws ecs run-task).
+  # Resources: cluster ARN + wildcard under it + migration task def ARN when provided.
+  # compact() drops the task def entry when migration_task_definition_arn = "".
+  # The ecs:cluster condition pins the action to this specific cluster.
+  statement {
+    sid     = "ECSRunTask"
+    effect  = "Allow"
+    actions = ["ecs:RunTask"]
+    resources = compact([
+      var.ecs_cluster_arn,
+      "${var.ecs_cluster_arn}/*",
+      var.migration_task_definition_arn,
+    ])
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = [var.ecs_cluster_arn]
+    }
+  }
+
+  # DescribeTasks/ListTasks/StopTask — used by aws ecs wait tasks-stopped
+  # and the exit-code check after migrations complete.
+  # Task ARNs are not known at policy creation time; resources = "*" is
+  # restricted to this cluster via the ecs:cluster condition.
+  statement {
+    sid    = "ECSManageTasks"
+    effect = "Allow"
+    actions = [
+      "ecs:DescribeTasks",
+      "ecs:ListTasks",
+      "ecs:StopTask",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = [var.ecs_cluster_arn]
+    }
+  }
+
+  # ⚠️  PassRole — required for both RegisterTaskDefinition and RunTask.
+  #     Scoped to the task execution role + task role only.
   statement {
     sid     = "PassRolesToECS"
     effect  = "Allow"
