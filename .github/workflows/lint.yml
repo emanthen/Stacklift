@@ -1,0 +1,84 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "modules/**"
+      - "examples/**"
+      - ".github/workflows/**"
+
+jobs:
+  terraform-lint:
+    name: terraform fmt + validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+
+      # ── fmt ───────────────────────────────────────────────────────────────
+      # Checks every .tf file is formatted. Fails the PR if any file needs
+      # reformatting. Run `terraform fmt -recursive` locally to fix.
+
+      - name: Check formatting (modules)
+        run: terraform fmt -check -recursive modules/
+
+      - name: Check formatting (examples)
+        run: terraform fmt -check -recursive examples/
+
+      # ── validate ──────────────────────────────────────────────────────────
+      # Validates each module in isolation. Does not require AWS credentials
+      # or a configured backend — just checks syntax and internal references.
+
+      - name: Validate vpc
+        working-directory: modules/vpc
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate rds
+        working-directory: modules/rds
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate ecr
+        working-directory: modules/ecr
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate ecs-cluster
+        working-directory: modules/ecs-cluster
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate ecs-service
+        working-directory: modules/ecs-service
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate alb
+        working-directory: modules/alb
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate secrets
+        working-directory: modules/secrets
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate cicd
+        working-directory: modules/cicd
+        run: |
+          terraform init -backend=false
+          terraform validate

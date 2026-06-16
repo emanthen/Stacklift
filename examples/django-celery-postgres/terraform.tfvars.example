@@ -1,0 +1,48 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# Do NOT commit terraform.tfvars — it contains account-specific identifiers.
+
+# ── Project ───────────────────────────────────────────────────────────────────
+
+project_name = "mysaas"
+environment  = "prod"
+aws_region   = "us-east-1"
+
+# ── Networking ────────────────────────────────────────────────────────────────
+
+vpc_cidr = "10.0.0.0/16"
+
+# ── DNS ───────────────────────────────────────────────────────────────────────
+
+domain_name     = "api.mysaas.com"
+route53_zone_id = "Z1234567890ABCDEFGHIJ"   # aws route53 list-hosted-zones --no-cli-pager
+
+# ── Database ──────────────────────────────────────────────────────────────────
+
+db_instance_class = "db.t3.micro"
+
+# ── ECS — Web ─────────────────────────────────────────────────────────────────
+
+container_port    = 8000
+web_cpu           = 256
+web_memory        = 512
+web_desired_count = 1
+
+# ── ECS — Celery Worker ───────────────────────────────────────────────────────
+
+celery_cpu           = 256
+celery_memory        = 512
+celery_desired_count = 1
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+log_retention_days = 30
+
+# ── GitHub OIDC ───────────────────────────────────────────────────────────────
+
+github_org    = "your-github-org"
+github_repo   = "mysaas"
+github_branch = "main"
+
+# Set false if another Stacklift project already created the OIDC provider
+# in this AWS account. Check: aws iam list-open-id-connect-providers --no-cli-pager
+create_oidc_provider = true
