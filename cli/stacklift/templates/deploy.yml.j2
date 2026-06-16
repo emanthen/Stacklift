@@ -1,0 +1,106 @@
+name: Deploy
+
+on:
+  push:
+    branches: [{{ github_branch }}]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: {% raw %}${{ vars.AWS_REGION }}{% endraw %}
+
+jobs:
+  deploy:
+    name: Build → Push → Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: {% raw %}${{ vars.AWS_ROLE_ARN }}{% endraw %}
+
+          aws-region: {% raw %}${{ env.AWS_REGION }}{% endraw %}
+
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        env:
+          REGISTRY: {% raw %}${{ steps.login-ecr.outputs.registry }}{% endraw %}
+
+          REPOSITORY: {% raw %}${{ vars.ECR_REPOSITORY }}{% endraw %}
+
+          IMAGE_TAG: {% raw %}${{ github.sha }}{% endraw %}
+
+        run: |
+          docker build \
+            --tag $REGISTRY/$REPOSITORY:$IMAGE_TAG \
+            --tag $REGISTRY/$REPOSITORY:latest \
+            --cache-from $REGISTRY/$REPOSITORY:latest \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            .
+          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+          docker push $REGISTRY/$REPOSITORY:latest
+
+      - name: Fetch task definition
+        env:
+          ECS_TASK_FAMILY: {% raw %}${{ vars.ECS_TASK_FAMILY }}{% endraw %}
+
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition $ECS_TASK_FAMILY \
+            --query taskDefinition --output json > task-def.json
+
+      - uses: aws-actions/amazon-ecs-render-task-definition@v1
+        id: render
+        with:
+          task-definition: task-def.json
+          container-name: app
+          image: {% raw %}${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}{% endraw %}
+
+
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: {% raw %}${{ steps.render.outputs.task-definition }}{% endraw %}
+
+          service: {% raw %}${{ vars.ECS_SERVICE }}{% endraw %}
+
+          cluster: {% raw %}${{ vars.ECS_CLUSTER }}{% endraw %}
+
+          wait-for-service-stability: true
+{% if enable_celery %}
+
+      - name: Fetch Celery task definition
+        env:
+          ECS_CELERY_TASK_FAMILY: {% raw %}${{ vars.ECS_CELERY_TASK_FAMILY }}{% endraw %}
+
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition $ECS_CELERY_TASK_FAMILY \
+            --query taskDefinition --output json > celery-task-def.json
+
+      - uses: aws-actions/amazon-ecs-render-task-definition@v1
+        id: render-celery
+        with:
+          task-definition: celery-task-def.json
+          container-name: app
+          image: {% raw %}${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}{% endraw %}
+
+
+      - uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: {% raw %}${{ steps.render-celery.outputs.task-definition }}{% endraw %}
+
+          service: {% raw %}${{ vars.ECS_CELERY_SERVICE }}{% endraw %}
+
+          cluster: {% raw %}${{ vars.ECS_CLUSTER }}{% endraw %}
+
+          wait-for-service-stability: true
+{% endif %}

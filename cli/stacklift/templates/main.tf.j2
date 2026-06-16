@@ -1,0 +1,256 @@
+terraform {
+  required_version = ">= 1.5"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.5"
+    }
+  }
+
+  backend "s3" {}
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = var.project_name
+      Environment = var.environment
+      ManagedBy   = "stacklift"
+    }
+  }
+}
+
+module "vpc" {
+  source = "{{ stacklift_source }}//modules/vpc?ref={{ stacklift_ref }}"
+
+  project_name       = var.project_name
+  environment        = var.environment
+  aws_region         = var.aws_region
+  cidr_block         = "10.0.0.0/16"
+  az_count           = 2
+  enable_nat_gateway = true
+  single_nat_gateway = true
+}
+
+module "ecr" {
+  source = "{{ stacklift_source }}//modules/ecr?ref={{ stacklift_ref }}"
+
+  project_name     = var.project_name
+  environment      = var.environment
+  aws_region       = var.aws_region
+  scan_on_push     = true
+  keep_image_count = 10
+}
+
+module "ecs_cluster" {
+  source = "{{ stacklift_source }}//modules/ecs-cluster?ref={{ stacklift_ref }}"
+
+  project_name              = var.project_name
+  environment               = var.environment
+  aws_region                = var.aws_region
+  enable_container_insights = true
+  log_retention_days        = 30
+}
+
+module "app_secrets" {
+  source = "{{ stacklift_source }}//modules/secrets?ref={{ stacklift_ref }}"
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = var.aws_region
+
+  secret_values = {
+{% if framework == "django" %}
+    SECRET_KEY     = "replace-me-after-apply"
+    RESEND_API_KEY = "replace-me-after-apply"
+    ALLOWED_HOSTS  = var.domain_name
+{% else %}
+    APP_SECRET_KEY  = "replace-me-after-apply"
+    RESEND_API_KEY  = "replace-me-after-apply"
+    ALLOWED_ORIGINS = "https://${var.domain_name}"
+{% endif %}
+  }
+
+  recovery_window_days = 30
+}
+
+module "rds" {
+  source = "{{ stacklift_source }}//modules/rds?ref={{ stacklift_ref }}"
+
+  project_name       = var.project_name
+  environment        = var.environment
+  aws_region         = var.aws_region
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+
+  allowed_security_group_ids = []
+
+  instance_class        = var.db_instance_class
+  engine_version        = "15"
+  allocated_storage     = 20
+  multi_az              = false
+  deletion_protection   = true
+  skip_final_snapshot   = false
+  backup_retention_days = 7
+  recovery_window_days  = 30
+}
+
+module "alb" {
+  source = "{{ stacklift_source }}//modules/alb?ref={{ stacklift_ref }}"
+
+  project_name      = var.project_name
+  environment       = var.environment
+  aws_region        = var.aws_region
+  vpc_id            = module.vpc.vpc_id
+  public_subnet_ids = module.vpc.public_subnet_ids
+
+  domain_name       = var.domain_name
+  route53_zone_id   = var.route53_zone_id
+  create_dns_record = true
+
+  container_port       = {{ container_port }}
+  health_check_path    = "{{ health_check_path }}"
+  deregistration_delay = 30
+}
+
+locals {
+  common_env_vars = {
+{% if framework == "django" %}
+    DJANGO_SETTINGS_MODULE = "config.settings.production"
+{% endif %}
+    ENVIRONMENT = var.environment
+    AWS_REGION  = var.aws_region
+    PORT        = "{{ container_port }}"
+    LOG_LEVEL   = "{{ 'INFO' if framework == 'django' else 'info' }}"
+  }
+
+  common_secrets = {
+{% if framework == "django" %}
+    "DATABASE_URL"   = "${module.rds.db_secret_arn}:DATABASE_URL::"
+    "SECRET_KEY"     = "${module.app_secrets.secret_arn}:SECRET_KEY::"
+    "RESEND_API_KEY" = "${module.app_secrets.secret_arn}:RESEND_API_KEY::"
+    "ALLOWED_HOSTS"  = "${module.app_secrets.secret_arn}:ALLOWED_HOSTS::"
+{% else %}
+    "DATABASE_URL"    = "${module.rds.db_secret_arn}:DATABASE_URL::"
+    "APP_SECRET_KEY"  = "${module.app_secrets.secret_arn}:APP_SECRET_KEY::"
+    "RESEND_API_KEY"  = "${module.app_secrets.secret_arn}:RESEND_API_KEY::"
+    "ALLOWED_ORIGINS" = "${module.app_secrets.secret_arn}:ALLOWED_ORIGINS::"
+{% endif %}
+  }
+
+  secret_arns = [
+    module.rds.db_secret_arn,
+    module.app_secrets.secret_arn,
+  ]
+}
+
+module "ecs_service" {
+  source = "{{ stacklift_source }}//modules/ecs-service?ref={{ stacklift_ref }}"
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = var.aws_region
+
+  cluster_id     = module.ecs_cluster.cluster_id
+  log_group_name = module.ecs_cluster.log_group_name
+
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+
+  alb_target_group_arn  = module.alb.target_group_arn
+  alb_security_group_id = module.alb.alb_security_group_id
+
+  image_url      = "${module.ecr.repository_url}:latest"
+  cpu            = {{ cpu }}
+  memory         = {{ memory }}
+  desired_count  = 1
+  container_port = {{ container_port }}
+
+  health_check_path                 = "{{ health_check_path }}"
+  health_check_grace_period_seconds = 90
+
+  environment_variables = local.common_env_vars
+  secrets               = local.common_secrets
+  secret_arns           = local.secret_arns
+}
+{% if enable_celery %}
+
+module "ecs_celery" {
+  source = "{{ stacklift_source }}//modules/ecs-service?ref={{ stacklift_ref }}"
+
+  project_name = "${var.project_name}-celery"
+  environment  = var.environment
+  aws_region   = var.aws_region
+
+  cluster_id     = module.ecs_cluster.cluster_id
+  log_group_name = module.ecs_cluster.log_group_name
+
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+
+  alb_target_group_arn  = null
+  alb_security_group_id = null
+
+  image_url     = "${module.ecr.repository_url}:latest"
+  cpu           = {{ cpu }}
+  memory        = {{ memory }}
+  desired_count = 1
+  container_port = {{ container_port }}
+
+  health_check_path = "{{ health_check_path }}"
+
+  environment_variables = merge(local.common_env_vars, {
+    IS_CELERY_WORKER   = "true"
+    CELERY_CONCURRENCY = "2"
+  })
+  secrets     = local.common_secrets
+  secret_arns = local.secret_arns
+}
+{% endif %}
+
+resource "aws_security_group_rule" "ecs_to_rds" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = module.rds.rds_security_group_id
+  source_security_group_id = module.ecs_service.task_security_group_id
+  description              = "ECS tasks to RDS PostgreSQL"
+}
+{% if enable_celery %}
+
+resource "aws_security_group_rule" "ecs_celery_to_rds" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = module.rds.rds_security_group_id
+  source_security_group_id = module.ecs_celery.task_security_group_id
+  description              = "Celery tasks to RDS PostgreSQL"
+}
+{% endif %}
+
+module "cicd" {
+  source = "{{ stacklift_source }}//modules/cicd?ref={{ stacklift_ref }}"
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = var.aws_region
+
+  create_oidc_provider    = var.create_oidc_provider
+  github_org              = var.github_org
+  github_repo             = var.github_repo
+  github_branch           = var.github_branch
+
+  ecr_repository_arn      = module.ecr.repository_arn
+  ecs_cluster_arn         = module.ecs_cluster.cluster_arn
+  ecs_service_arn         = module.ecs_service.service_id
+  task_execution_role_arn = module.ecs_service.task_execution_role_arn
+  task_role_arn           = module.ecs_service.task_role_arn
+}
