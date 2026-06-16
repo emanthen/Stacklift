@@ -42,3 +42,13 @@ output "task_security_group_id" {
   description = "ID of the ECS tasks security group. Pass to module.rds as allowed_security_group_ids so RDS accepts connections from ECS."
   value       = aws_security_group.ecs_tasks.id
 }
+
+output "migrate_task_definition_arn" {
+  description = "ARN of the migration task definition. Null when enable_migration_task = false."
+  value       = var.enable_migration_task ? aws_ecs_task_definition.migrate[0].arn : null
+}
+
+output "migrate_task_definition_family" {
+  description = "Family name of the migration task definition. Null when enable_migration_task = false. Use as --task-definition in aws ecs run-task."
+  value       = var.enable_migration_task ? aws_ecs_task_definition.migrate[0].family : null
+}

@@ -161,6 +161,12 @@ variable "task_role_policy_arns" {
   default     = []
 }
 
+variable "enable_migration_task" {
+  description = "When true, creates an additional ECS task definition for running Django migrations. The task uses the same image, IAM roles, secrets, and log group as the web service but runs 'python manage.py migrate --no-input' as its command. Run via aws ecs run-task in CI/CD — not a long-running service."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Additional tags merged onto all resources. Project, Environment, and ManagedBy are always set automatically."
   type        = map(string)

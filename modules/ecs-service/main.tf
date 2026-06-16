@@ -1,13 +1,3 @@
-terraform {
-  required_version = ">= 1.5"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
 locals {
   name_prefix    = "${var.project_name}-${var.environment}"
   container_name = "app"
@@ -192,6 +182,57 @@ resource "aws_ecs_task_definition" "this" {
 
   tags = merge(var.tags, {
     Name        = "${local.name_prefix}-task"
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "stacklift"
+  })
+}
+
+# ── MIGRATION TASK DEFINITION ─────────────────────────────────────────────────
+# Created when enable_migration_task = true.
+# One-shot task (not a service): run via aws ecs run-task in CI/CD before the
+# web service deploy. aws ecs wait tasks-stopped blocks until complete;
+# non-zero exit code fails the pipeline — a broken migration never reaches prod.
+
+resource "aws_ecs_task_definition" "migrate" {
+  count = var.enable_migration_task ? 1 : 0
+
+  family                   = "${local.name_prefix}-migrate-task"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = tostring(var.cpu)
+  memory                   = tostring(var.memory)
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = local.container_name
+      image     = var.image_url
+      essential = true
+      command   = ["python", "manage.py", "migrate", "--no-input"]
+
+      environment = [
+        for k, v in var.environment_variables : { name = k, value = v }
+      ]
+
+      secrets = [
+        for k, v in var.secrets : { name = k, valueFrom = v }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = var.log_group_name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "migrate"
+        }
+      }
+    }
+  ])
+
+  tags = merge(var.tags, {
+    Name        = "${local.name_prefix}-migrate-task"
     Project     = var.project_name
     Environment = var.environment
     ManagedBy   = "stacklift"

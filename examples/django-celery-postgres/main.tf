@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.5"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
   }
 
   # Configure the S3 backend in backend.tf — values cannot use variables here.
@@ -188,8 +192,10 @@ module "ecs_web" {
   desired_count  = var.web_desired_count
   container_port = var.container_port
 
-  health_check_path                = "/api/health/"
+  health_check_path                 = "/api/health/"
   health_check_grace_period_seconds = 90
+
+  enable_migration_task = true
 
   environment_variables = local.common_env_vars
   secrets               = local.common_secrets
@@ -253,6 +259,60 @@ resource "aws_security_group_rule" "ecs_celery_to_rds" {
   security_group_id        = module.rds.rds_security_group_id
   source_security_group_id = module.ecs_celery.task_security_group_id
   description              = "Celery ECS tasks to RDS PostgreSQL"
+}
+
+# ── MIGRATION RUNNER (Terraform-driven, on-demand) ───────────────────────────
+# Primary path: deploy.yml CI/CD runs migrations automatically before every deploy.
+# This null_resource runs migrations via terraform apply whenever the migration
+# task definition family changes (new task def registered).
+#
+# Requires: AWS CLI + bash (Git Bash on Windows, native on macOS/Linux).
+# To skip on apply: terraform apply -target=module.ecs_web (excludes null_resource)
+
+resource "null_resource" "run_migrations" {
+  triggers = {
+    task_definition = module.ecs_web.migrate_task_definition_family
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+
+      TASK_ARN=$(aws ecs run-task \
+        --cluster "${module.ecs_cluster.cluster_id}" \
+        --task-definition "${module.ecs_web.migrate_task_definition_family}" \
+        --launch-type FARGATE \
+        --network-configuration \
+          "awsvpcConfiguration={subnets=[${join(",", module.vpc.private_subnet_ids)}],securityGroups=[${module.ecs_web.task_security_group_id}],assignPublicIp=DISABLED}" \
+        --query 'tasks[0].taskArn' \
+        --output text \
+        --no-cli-pager)
+
+      echo "Migration task: $$TASK_ARN"
+
+      aws ecs wait tasks-stopped \
+        --cluster "${module.ecs_cluster.cluster_id}" \
+        --tasks "$$TASK_ARN" \
+        --no-cli-pager
+
+      EXIT_CODE=$(aws ecs describe-tasks \
+        --cluster "${module.ecs_cluster.cluster_id}" \
+        --tasks "$$TASK_ARN" \
+        --query 'tasks[0].containers[0].exitCode' \
+        --output text \
+        --no-cli-pager)
+
+      echo "Migration exit code: $$EXIT_CODE"
+      if [ "$$EXIT_CODE" != "0" ]; then
+        echo "ERROR: Migration failed (exit $$EXIT_CODE)" >&2
+        exit 1
+      fi
+      echo "Migrations complete."
+    EOT
+  }
+
+  depends_on = [module.ecs_web]
 }
 
 # ── CICD ──────────────────────────────────────────────────────────────────────

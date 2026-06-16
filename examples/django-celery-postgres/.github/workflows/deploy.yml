@@ -82,7 +82,57 @@ jobs:
           container-name: app
           image: ${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
 
-      # ── 8. Deploy to ECS (web service) ───────────────────────────────────────
+      # ── 8. Run database migrations ───────────────────────────────────────────
+      # Runs BEFORE the web service deploy — a broken migration never reaches prod.
+      # Uses the :latest image pushed in step 5 (ECS pulls from ECR at task start).
+      # aws ecs wait tasks-stopped blocks up to 10 minutes.
+      # Non-zero exit fails the workflow; the service deploy is skipped entirely.
+      #
+      # Required GitHub Actions variables (set from terraform output after apply):
+      #   ECS_MIGRATE_TASK_FAMILY  ← module.ecs_web.migrate_task_definition_family
+      #   ECS_PRIVATE_SUBNETS      ← comma-separated module.vpc.private_subnet_ids
+      #   ECS_TASK_SECURITY_GROUP  ← module.ecs_web.task_security_group_id
+      - name: Run database migrations
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_MIGRATE_TASK_FAMILY: ${{ vars.ECS_MIGRATE_TASK_FAMILY }}
+          ECS_PRIVATE_SUBNETS: ${{ vars.ECS_PRIVATE_SUBNETS }}
+          ECS_TASK_SECURITY_GROUP: ${{ vars.ECS_TASK_SECURITY_GROUP }}
+        run: |
+          set -euo pipefail
+
+          TASK_ARN=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$ECS_MIGRATE_TASK_FAMILY" \
+            --launch-type FARGATE \
+            --network-configuration \
+              "awsvpcConfiguration={subnets=[$ECS_PRIVATE_SUBNETS],securityGroups=[$ECS_TASK_SECURITY_GROUP],assignPublicIp=DISABLED}" \
+            --query 'tasks[0].taskArn' \
+            --output text \
+            --no-cli-pager)
+
+          echo "Migration task: $TASK_ARN"
+
+          aws ecs wait tasks-stopped \
+            --cluster "$ECS_CLUSTER" \
+            --tasks "$TASK_ARN" \
+            --no-cli-pager
+
+          EXIT_CODE=$(aws ecs describe-tasks \
+            --cluster "$ECS_CLUSTER" \
+            --tasks "$TASK_ARN" \
+            --query 'tasks[0].containers[0].exitCode' \
+            --output text \
+            --no-cli-pager)
+
+          echo "Migration exit code: $EXIT_CODE"
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "::error::Migration failed (exit $EXIT_CODE). Aborting deploy."
+            exit 1
+          fi
+          echo "Migrations complete."
+
+      # ── 9. Deploy to ECS (web service) ───────────────────────────────────────
       # Registers a new task definition revision and updates the service.
       # wait-for-service-stability: true blocks until all new tasks are healthy
       # or the deployment circuit breaker rolls back.
@@ -94,7 +144,7 @@ jobs:
           cluster: ${{ vars.ECS_CLUSTER }}
           wait-for-service-stability: true
 
-      # ── 9. Deploy to ECS (celery worker) ─────────────────────────────────────
+      # ── 10. Deploy to ECS (celery worker) ────────────────────────────────────
       # Renders and deploys a separate task definition for the Celery worker.
       - name: Download Celery task definition
         env:
