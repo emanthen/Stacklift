@@ -88,6 +88,34 @@ Each module is self-contained with its own `main.tf`, `variables.tf`, `outputs.t
 
 ---
 
+## Use from Terraform Registry
+
+Each module is published to the Terraform Registry. Reference directly without cloning:
+
+```hcl
+module "ecs_service" {
+  source  = "emanthen/stacklift/aws//modules/ecs-service"
+  version = "~> 0.1"
+
+  project_name   = "mysaas"
+  environment    = "prod"
+  aws_region     = "us-east-1"
+  cluster_id     = module.ecs_cluster.cluster_id
+  log_group_name = module.ecs_cluster.log_group_name
+  vpc_id         = module.vpc.vpc_id
+  # ...
+}
+```
+
+Or let the CLI wire everything together:
+
+```bash
+pip install stacklift
+stacklift init
+```
+
+---
+
 ## Examples
 
 ### [Django + Celery + PostgreSQL](examples/django-celery-postgres/)
@@ -145,6 +173,48 @@ Outputs flow downstream explicitly — no data source lookups across module boun
 
 ---
 
+## Security comparison
+
+Controls that distinguish Stacklift from typical blog-post Terraform tutorials:
+
+| Control | Stacklift | Most tutorials |
+|---|---|---|
+| AWS credentials in CI/CD | OIDC token, nothing stored | Long-lived key in GitHub Secrets |
+| Application secrets | Secrets Manager + ECS injection | `.env` file or hardcoded tfvars |
+| Database password | `random_password`, stored in Secrets Manager | Hardcoded in variables |
+| ECS task networking | Private subnet, `assign_public_ip = false` | Often public subnet |
+| RDS protection | `deletion_protection` + `prevent_destroy` | No protection |
+| TLS policy | TLS 1.3 minimum (ELBSecurityPolicy-TLS13-1-2-2021-06) | Default (accepts TLS 1.0) |
+| `iam:PassRole` scope | Specific execution + task role ARNs | Wildcard `*` |
+| Django migration runner | One-shot ECS task, blocks deploy on failure | Not covered |
+
+---
+
+## Estimated monthly cost
+
+Minimal configuration: 1 web task, 1 RDS instance, single NAT, us-east-1.
+
+| Resource | Configuration | ~$/month |
+|---|---|---|
+| NAT Gateway | 1 NAT × 730h + ~10 GB data | $35 |
+| ALB | 730h + ~1 LCU | $17 |
+| RDS PostgreSQL | db.t3.micro, 20 GB gp3, single-AZ | $15 |
+| ECS Fargate | 1 task × 0.25 vCPU × 0.5 GB × 730h | $11 |
+| ECR | < 1 GB stored | < $1 |
+| Secrets Manager | 2 secrets × $0.40 | < $1 |
+| CloudWatch Logs | Minimal volume | < $1 |
+| **Total** | | **~$79/month** |
+
+Common add-ons:
+
+| Addition | Extra cost |
+|---|---|
+| Celery worker task | +$11/month |
+| Multi-AZ RDS | +$15/month (doubles RDS line) |
+| Second NAT (HA) | +$32/month |
+
+---
+
 ## Requirements
 
 | Tool | Version | Check |
@@ -168,6 +238,24 @@ The open-source modules cover the core stack. The Pro tier adds:
 - Private Discord + email support
 
 [Learn more →](docs/pro-tier.md)
+
+---
+
+## vs. alternatives
+
+The two most-starred open-source Django+ECS Terraform projects on GitHub:
+
+| | **Stacklift** | testdrivenio/django-ecs-terraform | briancaffey/terraform-aws-django |
+|---|---|---|---|
+| FastAPI support | ✅ | ❌ Django only | ❌ Django only |
+| GitHub Actions OIDC | ✅ No stored credentials | ❌ Long-lived key | ❌ Long-lived key |
+| Secrets Manager | ✅ ECS injection | ❌ | ❌ |
+| Django migration runner | ✅ One-shot ECS task | ❌ | ❌ |
+| Python CLI (`stacklift init`) | ✅ | ❌ | ❌ |
+| Windows compatible | ✅ Documented | ❌ | ❌ |
+| `prevent_destroy` on RDS | ✅ | ❌ | ❌ |
+| Active maintenance | ✅ | Last commit ~2022 | Last commit ~2023 |
+| Pro tier | ✅ Multi-env, blue-green, autoscaling | ❌ | ❌ |
 
 ---
 

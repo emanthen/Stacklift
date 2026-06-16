@@ -19,7 +19,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "~1.5"
+          terraform_version: "1.9.0"
 
       # ── fmt ───────────────────────────────────────────────────────────────
       # Checks every .tf file is formatted. Fails the PR if any file needs

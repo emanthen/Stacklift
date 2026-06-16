@@ -101,8 +101,9 @@ Creates an ECS Fargate service with task definition, IAM roles (execution + task
 | `health_check_path` | `/api/health/` | HTTP path for health checks |
 | `secrets` | `{}` | `{ENV_VAR: "sm_arn:KEY::"}` map |
 | `secret_arns` | `[]` | Base ARNs for IAM permission |
+| `enable_migration_task` | `false` | Create a one-shot migration task definition |
 
-**Key outputs:** `service_name`, `service_id`, `task_definition_family`, `task_execution_role_arn`, `task_security_group_id`
+**Key outputs:** `service_name`, `service_id`, `task_definition_family`, `task_execution_role_arn`, `task_security_group_id`, `migrate_task_definition_family`
 
 > **Important:** After the first `terraform apply`, the CI/CD pipeline owns `task_definition` updates. Terraform ignores them via `ignore_changes`.
 
